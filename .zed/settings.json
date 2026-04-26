@@ -1,0 +1,12 @@
+{
+  "context_servers": {
+    "code-grasp": {
+      "args": [],
+      "command": "/home/borje/.local/bin/code-grasp-mcp",
+      "env": {
+        "RUST_LOG": "info"
+      },
+      "source": "custom"
+    }
+  }
+}

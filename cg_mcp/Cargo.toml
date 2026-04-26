@@ -1,0 +1,29 @@
+[package]
+name = "code-grasp-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CodeGrasp MCP server — local semantic codebase search for AI agents"
+
+[[bin]]
+name = "code-grasp-mcp"
+path = "src/main.rs"
+
+[features]
+default = ["ort-bundled"]
+ort-bundled = ["cg_core/ort-bundled"]
+ort-dynamic = ["cg_core/ort-dynamic"]
+
+[dependencies]
+cg_core = { path = "../crates/cg-core", default-features = false }
+cg_proto = { path = "../crates/cg-proto" }
+rmcp = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
