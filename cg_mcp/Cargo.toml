@@ -13,6 +13,7 @@ path = "src/main.rs"
 default = ["ort-bundled"]
 ort-bundled = ["cg_core/ort-bundled"]
 ort-dynamic = ["cg_core/ort-dynamic"]
+ort-cuda = ["cg_core/ort-cuda"]
 
 [dependencies]
 cg_core = { path = "../crates/cg-core", default-features = false }

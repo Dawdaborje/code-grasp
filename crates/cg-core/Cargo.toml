@@ -15,6 +15,8 @@ ort-bundled = ["fastembed/ort-download-binaries"]
 # Link ONNX Runtime from `ORT_DYLIB_PATH` or `libonnxruntime.so` on PATH (matches `ort` load-dynamic).
 # Build: `cargo build -p code-grasp --no-default-features --features ort-dynamic` (see install script tip).
 ort-dynamic = ["fastembed/ort-load-dynamic"]
+# Enable ONNX Runtime CUDA EP (requires CUDA toolkit / driver). Falls back to CPU if unavailable at runtime.
+ort-cuda = ["ort/cuda"]
 
 [dependencies]
 thiserror = { workspace = true }
@@ -33,6 +35,8 @@ tree-sitter-java = { workspace = true }
 tree-sitter-c = { workspace = true }
 tree-sitter-cpp = { workspace = true }
 streaming-iterator = "0.1"
+rayon = { workspace = true }
+thread_local = { workspace = true }
 # Cannot inherit `fastembed` from `[workspace.dependencies]` with `default-features = false` (Cargo limitation).
 fastembed = { version = "4", default-features = false, features = ["hf-hub-native-tls"] }
 ort = { workspace = true }

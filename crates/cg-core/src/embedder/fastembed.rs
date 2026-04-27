@@ -11,6 +11,20 @@ use crate::paths;
 
 static ORT_ENV_INIT: OnceLock<Result<(), String>> = OnceLock::new();
 
+fn execution_provider_stack() -> Vec<ort::execution_providers::ExecutionProviderDispatch> {
+    #[cfg(feature = "ort-cuda")]
+    {
+        use ort::execution_providers::CUDAExecutionProvider;
+        let cuda = CUDAExecutionProvider::default().build();
+        let cpu = CPUExecutionProvider::default().build();
+        vec![cuda, cpu]
+    }
+    #[cfg(not(feature = "ort-cuda"))]
+    {
+        vec![CPUExecutionProvider::default().build()]
+    }
+}
+
 fn ensure_ort_environment() -> Result<(), CgError> {
     match ORT_ENV_INIT.get_or_init(|| {
         ort::init()
@@ -25,7 +39,7 @@ fn ensure_ort_environment() -> Result<(), CgError> {
     }
 }
 
-/// CPU embedding using `fastembed` models cached under `~/.cache/code-grasp/models/`.
+/// Local embedding via `fastembed` (CPU by default; build with `ort-cuda` to prefer CUDA).
 pub struct FastEmbedder {
     model: Mutex<TextEmbedding>,
     dimension: usize,
@@ -49,19 +63,21 @@ impl FastEmbedder {
 
         ensure_ort_environment()?;
 
+        let execution_providers = execution_provider_stack();
         tracing::info!(
             model = %info.model_code,
             dim = dimension,
             cache = %cache_dir.display(),
             ort_build = %ort::info(),
+            ort_cuda = cfg!(feature = "ort-cuda"),
+            ort_ep_count = execution_providers.len(),
             "initializing fastembed (model files may download on first use)"
         );
 
-        let cpu = CPUExecutionProvider::default().build();
         let opts = InitOptions::new(embedding_model)
             .with_cache_dir(cache_dir)
             .with_show_download_progress(true)
-            .with_execution_providers(vec![cpu]);
+            .with_execution_providers(execution_providers);
         let model = TextEmbedding::try_new(opts).map_err(|e| CgError::Embedding(e.to_string()))?;
 
         Ok(Self {

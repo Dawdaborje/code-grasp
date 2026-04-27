@@ -104,7 +104,7 @@ fn default_fastembed_model() -> String {
 }
 
 fn default_batch_size() -> usize {
-    32
+    64
 }
 
 fn default_max_file_size() -> u64 {

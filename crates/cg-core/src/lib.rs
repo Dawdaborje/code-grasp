@@ -17,7 +17,9 @@
 //! 2. [`chunker::AstChunker`] — tree-sitter chunks + sliding-window fallback.
 //! 3. [`embedder::FastEmbedder`] — dense vectors (default provider in [`CodeGrasp::index`](CodeGrasp::index)).
 //! 4. [`index::VectorIndex`] + [`store::ChunkStore`] — approximate nearest neighbors and FTS5 BM25.
-//! 5. [`CodeGrasp`] — async facade; CPU-bound work uses [`tokio::task::spawn_blocking`].
+//! 5. [`CodeGrasp`] — async facade; CPU-bound work uses [`tokio::task::spawn_blocking`]. Indexing chunks
+//!    files in parallel (rayon), pipelines embed + SQLite bulk transactions + vector adds, and optional
+//!    `ort-cuda` enables the ONNX Runtime CUDA execution provider.
 //!
 //! ## Library usage
 //!

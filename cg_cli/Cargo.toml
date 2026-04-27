@@ -14,6 +14,7 @@ default = ["ort-bundled"]
 lsp = ["cg_core/lsp"]
 ort-bundled = ["cg_core/ort-bundled"]
 ort-dynamic = ["cg_core/ort-dynamic"]
+ort-cuda = ["cg_core/ort-cuda"]
 
 [dependencies]
 cg_core = { path = "../crates/cg-core", default-features = false }

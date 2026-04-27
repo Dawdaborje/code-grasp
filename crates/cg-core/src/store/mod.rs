@@ -4,7 +4,7 @@ mod hybrid;
 
 use std::path::Path;
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 pub use hybrid::reciprocal_rank_fusion;
 
@@ -179,6 +179,37 @@ impl ChunkStore {
             )
             .map_err(CgError::Database)?;
         Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Insert many chunks in one **IMMEDIATE** transaction (single commit; FTS triggers batch efficiently).
+    pub fn insert_chunks_bulk(&self, batch: &[Chunk]) -> Result<Vec<i64>, CgError> {
+        if batch.is_empty() {
+            return Ok(Vec::new());
+        }
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(CgError::Database)?;
+        let mut ids = Vec::with_capacity(batch.len());
+        for c in batch {
+            let lang = format!("{:?}", c.language);
+            tx.execute(
+                "INSERT INTO chunks(file_path, start_line, end_line, start_byte, end_byte, language, content, content_hash)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    c.file_path.to_string_lossy(),
+                    c.start_line as i64,
+                    c.end_line as i64,
+                    c.start_byte as i64,
+                    c.end_byte as i64,
+                    lang,
+                    &c.content,
+                    &c.content_hash,
+                ],
+            )
+            .map_err(CgError::Database)?;
+            ids.push(tx.last_insert_rowid());
+        }
+        tx.commit().map_err(CgError::Database)?;
+        Ok(ids)
     }
 
     /// BM25-ranked chunk ids for `query` (top `limit`).

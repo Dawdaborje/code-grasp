@@ -4,7 +4,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::chunker::{AstChunker, Chunker};
+use rayon::prelude::*;
+use thread_local::ThreadLocal;
+
+use crate::chunker::{AstChunker, Chunk, Chunker};
 use crate::embedder::{Embedder, FastEmbedder};
 use crate::error::CgError;
 use crate::index::VectorIndex;
@@ -118,6 +121,48 @@ fn now_unix() -> i64 {
     }
 }
 
+/// Rayon wave size for file-level chunking (bounds peak memory from in-flight `Vec<Vec<Chunk>>`).
+const INDEX_FILE_PARALLEL_BATCH: usize = 64;
+/// Chunk count per embed pass, one SQLite transaction, and USearch `add` calls.
+const INDEX_PIPELINE_CHUNK_BATCH: usize = 2048;
+
+fn embed_write_chunk_batch(
+    embedder: &FastEmbedder,
+    store: &ChunkStore,
+    vindex: &VectorIndex,
+    dim: usize,
+    batch: Vec<Chunk>,
+) -> Result<usize, CgError> {
+    if batch.is_empty() {
+        return Ok(0);
+    }
+    let n = batch.len();
+    let texts: Vec<&str> = batch.iter().map(|c| c.content.as_str()).collect();
+    let embeddings = embedder.embed(&texts)?;
+    if embeddings.len() != n {
+        return Err(CgError::State("embedding batch size mismatch".into()));
+    }
+    if let Some(v0) = embeddings.first() {
+        if v0.len() != dim {
+            return Err(CgError::Embedding(format!(
+                "embedding length {} does not match model dimension {}",
+                v0.len(),
+                dim
+            )));
+        }
+    }
+    let row_ids = store.insert_chunks_bulk(&batch)?;
+    if row_ids.len() != n {
+        return Err(CgError::State(
+            "insert_chunks_bulk returned unexpected id count".into(),
+        ));
+    }
+    for (id, vec) in row_ids.iter().zip(embeddings.iter()) {
+        vindex.add(*id as u64, vec)?;
+    }
+    Ok(n)
+}
+
 fn blocking_index(root: PathBuf, settings: Settings, force: bool) -> Result<IndexStats, CgError> {
     if settings.embedding.provider != "fastembed" {
         return Err(CgError::Config(
@@ -196,11 +241,6 @@ fn blocking_index(root: PathBuf, settings: Settings, force: bool) -> Result<Inde
         .map(|f| (f.path.to_string_lossy().to_string(), f))
         .collect();
 
-    let chunker = AstChunker::new(
-        settings.indexing.min_chunk_tokens,
-        settings.indexing.max_chunk_tokens,
-    );
-
     for rel in &files_to_process {
         let key = rel.to_string_lossy().to_string();
         let ids = store.chunk_ids_for_file(&key)?;
@@ -210,39 +250,48 @@ fn blocking_index(root: PathBuf, settings: Settings, force: bool) -> Result<Inde
         store.delete_chunks_for_file(&key)?;
     }
 
-    let mut all_chunks = Vec::new();
-    for rel in &files_to_process {
-        let key = rel.to_string_lossy().to_string();
-        let sf = by_path
-            .get(&key)
-            .ok_or_else(|| CgError::State(format!("missing walked file `{key}`")))?;
-        let mut cs = chunker.chunk(sf)?;
-        all_chunks.append(&mut cs);
+    let min_t = settings.indexing.min_chunk_tokens;
+    let max_t = settings.indexing.max_chunk_tokens;
+    let tls: ThreadLocal<AstChunker> = ThreadLocal::new();
+
+    let reserve_guess = files_to_process
+        .len()
+        .saturating_mul(4)
+        .max(64)
+        .min(2_000_000);
+    if !files_to_process.is_empty() {
+        vindex.reserve(reserve_guess)?;
     }
 
-    let texts: Vec<&str> = all_chunks.iter().map(|c| c.content.as_str()).collect();
-    let embeddings = embedder.embed(&texts)?;
+    let mut pipeline = Vec::with_capacity(INDEX_PIPELINE_CHUNK_BATCH);
+    let mut chunks_written: u64 = 0;
 
-    if all_chunks.len() != embeddings.len() {
-        return Err(CgError::State("embedding batch size mismatch".into()));
-    }
-    if let Some(v0) = embeddings.first() {
-        if v0.len() != dim {
-            return Err(CgError::Embedding(format!(
-                "embedding length {} does not match model dimension {}",
-                v0.len(),
-                dim
-            )));
+    for file_batch in files_to_process.chunks(INDEX_FILE_PARALLEL_BATCH) {
+        let parts: Result<Vec<Vec<Chunk>>, CgError> = file_batch
+            .par_iter()
+            .map(|rel| {
+                let key = rel.to_string_lossy().to_string();
+                let sf = by_path
+                    .get(&key)
+                    .ok_or_else(|| CgError::State(format!("missing walked file `{key}`")))?;
+                let chunker = tls.get_or(|| AstChunker::new(min_t, max_t));
+                chunker.chunk(sf)
+            })
+            .collect();
+        for mut cs in parts? {
+            pipeline.append(&mut cs);
+            while pipeline.len() >= INDEX_PIPELINE_CHUNK_BATCH {
+                let batch: Vec<Chunk> = pipeline.drain(..INDEX_PIPELINE_CHUNK_BATCH).collect();
+                chunks_written +=
+                    embed_write_chunk_batch(&embedder, &store, &vindex, dim, batch)? as u64;
+            }
         }
     }
 
-    if !all_chunks.is_empty() {
-        vindex.reserve(all_chunks.len())?;
-    }
-
-    for (chunk, vec) in all_chunks.iter().zip(embeddings.iter()) {
-        let id = store.insert_chunk(chunk)?;
-        vindex.add(id as u64, vec)?;
+    if !pipeline.is_empty() {
+        let batch = std::mem::take(&mut pipeline);
+        chunks_written +=
+            embed_write_chunk_batch(&embedder, &store, &vindex, dim, batch)? as u64;
     }
 
     let ts = now_unix();
@@ -261,7 +310,7 @@ fn blocking_index(root: PathBuf, settings: Settings, force: bool) -> Result<Inde
 
     Ok(IndexStats {
         files_indexed: files_to_process.len() as u64,
-        chunks_written: all_chunks.len() as u64,
+        chunks_written,
     })
 }
 
