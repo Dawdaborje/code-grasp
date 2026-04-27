@@ -176,7 +176,11 @@ fn blocking_index(root: PathBuf, settings: Settings, force: bool) -> Result<Inde
     let index_path = paths::index_path(&root);
     let manifest_path = paths::manifest_path(&root);
 
-    let walker_files = walker::walk_sources(&root, settings.indexing.max_file_size_bytes)?;
+    let walker_files = walker::walk_sources(
+        &root,
+        settings.indexing.max_file_size_bytes,
+        &settings.indexing.extra_extensions,
+    )?;
     let mut current_hashes: HashMap<String, String> = HashMap::new();
     for sf in &walker_files {
         current_hashes.insert(

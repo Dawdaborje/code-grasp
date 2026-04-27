@@ -13,7 +13,7 @@ fn cgignore_excludes_matching_files() {
     fs::write(root.join("keep.rs"), "fn main() {}\n").unwrap();
     fs::write(root.join("x.skip"), "ignored\n").unwrap();
 
-    let files = walk_sources(root, 1024 * 1024).unwrap();
+    let files = walk_sources(root, 1024 * 1024, &[]).unwrap();
     assert_eq!(files.len(), 1);
     assert_eq!(files[0].path.to_string_lossy(), "keep.rs");
 }
@@ -26,7 +26,7 @@ fn skips_oversized_files() {
     let big = vec![b' '; 4096];
     fs::write(root.join("big.rs"), big).unwrap();
 
-    let files = walk_sources(root, 100).unwrap();
+    let files = walk_sources(root, 100, &[]).unwrap();
     assert_eq!(files.len(), 1);
     assert_eq!(files[0].path.to_string_lossy(), "small.rs");
 }

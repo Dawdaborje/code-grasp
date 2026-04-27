@@ -13,7 +13,8 @@
 //!
 //! ## Architecture (short)
 //!
-//! 1. [`walker::walk_sources`] — discover text files (`.gitignore`, `.cgignore`, size, binary sniff).
+//! 1. [`walker::walk_sources`] — discover text files (`.gitignore`, `.cgignore`, size, binary sniff,
+//!    built-in extensions + optional `[indexing] extra_extensions`, well-known extensionless names).
 //! 2. [`chunker::AstChunker`] — tree-sitter chunks + sliding-window fallback.
 //! 3. [`embedder::FastEmbedder`] — dense vectors (default provider in [`CodeGrasp::index`](CodeGrasp::index)).
 //! 4. [`index::VectorIndex`] + [`store::ChunkStore`] — approximate nearest neighbors and FTS5 BM25.

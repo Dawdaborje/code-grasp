@@ -48,6 +48,9 @@ pub struct IndexingSection {
     /// Default result cap for search when the caller does not override `limit`.
     #[serde(default = "default_search_limit")]
     pub default_limit: usize,
+    /// Extra filename extensions to index (lowercase entries without dot), merged with built-in list.
+    #[serde(default)]
+    pub extra_extensions: Vec<String>,
 }
 
 /// Paths to language servers (`[lsp]` in TOML; used when the `lsp` feature is enabled).
@@ -81,6 +84,7 @@ impl Default for IndexingSection {
             min_chunk_tokens: default_min_chunk_tokens(),
             max_chunk_tokens: default_max_chunk_tokens(),
             default_limit: default_search_limit(),
+            extra_extensions: Vec::new(),
         }
     }
 }
@@ -108,7 +112,7 @@ fn default_batch_size() -> usize {
 }
 
 fn default_max_file_size() -> u64 {
-    1_048_576
+    10_485_760
 }
 
 fn default_min_chunk_tokens() -> u32 {
@@ -200,6 +204,9 @@ impl Settings {
         }
         if o.indexing.default_limit != 0 {
             self.indexing.default_limit = o.indexing.default_limit;
+        }
+        if !o.indexing.extra_extensions.is_empty() {
+            self.indexing.extra_extensions.clone_from(&o.indexing.extra_extensions);
         }
         self.lsp
             .rust_analyzer_path

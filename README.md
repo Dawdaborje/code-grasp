@@ -66,7 +66,7 @@ model = "BAAI/bge-small-en-v1.5"
 batch_size = 32
 
 [indexing]
-max_file_size_bytes = 1048576
+max_file_size_bytes = 10485760
 min_chunk_tokens = 20
 max_chunk_tokens = 512
 default_limit = 10

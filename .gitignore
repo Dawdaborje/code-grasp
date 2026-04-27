@@ -27,3 +27,7 @@ target
 
 # CodeGrasp per-project index and metadata
 .code-grasp/
+
+# Local benchmark outputs (regenerate with scripts/bench_search.py)
+bench/results-*.md
+bench/results-*.csv

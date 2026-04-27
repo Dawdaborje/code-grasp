@@ -4,10 +4,12 @@ model = "BAAI/bge-small-en-v1.5"
 batch_size = 64
 
 [indexing]
-max_file_size_bytes = 1048576
+max_file_size_bytes = 10485760
 min_chunk_tokens = 20
 max_chunk_tokens = 512
 default_limit = 10
+# Optional: merge more extensions (no leading dot), e.g. Arch hook scripts:
+# extra_extensions = ["install", "hook"]
 
 [lsp]
 rust_analyzer_path = "rust-analyzer"

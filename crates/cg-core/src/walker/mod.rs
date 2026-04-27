@@ -2,7 +2,7 @@
 
 mod gitignore;
 
-pub use gitignore::supported_extensions;
+pub use gitignore::{is_supported_extension, should_index_path, supported_extensions};
 
 use std::fs::File;
 use std::io::Read;
@@ -23,17 +23,21 @@ pub struct SourceFile {
 
 const PREFIX_SCAN: usize = 8192;
 
-/// Walk `root` and yield source files according to `max_file_size_bytes` and extension rules.
+/// Walk `root` and yield source files according to `max_file_size_bytes` and path rules.
 ///
 /// Behavior:
 ///
 /// - Root is [`canonicalize`](std::path::Path::canonicalize)d; returned [`SourceFile::path`](SourceFile::path) values are relative to it.
 /// - **Hidden** path segments are skipped (`ignore` builder `hidden(true)` skips dot dirs/files as configured).
 /// - **`.gitignore`** and **`.cgignore`** are honored (see [`ignore::WalkBuilder`]).
-/// - Only extensions from [`gitignore::supported_extensions`](crate::walker::supported_extensions) are kept.
+/// - Only paths for which [`gitignore::should_index_path`](crate::walker::should_index_path) is true (built-in extensions, well-known basenames, plus `extra_extensions`) are kept.
 /// - Files larger than `max_file_size_bytes` or empty are skipped.
 /// - If the first 8 KiB (or less for small files) contains a **NUL** byte, the file is treated as binary and skipped.
-pub fn walk_sources(root: &Path, max_file_size_bytes: u64) -> Result<Vec<SourceFile>, CgError> {
+pub fn walk_sources(
+    root: &Path,
+    max_file_size_bytes: u64,
+    extra_extensions: &[String],
+) -> Result<Vec<SourceFile>, CgError> {
     let root = root.canonicalize().map_err(CgError::Io)?;
     let mut out = Vec::new();
 
@@ -47,7 +51,7 @@ pub fn walk_sources(root: &Path, max_file_size_bytes: u64) -> Result<Vec<SourceF
             continue;
         }
         let path = ent.path();
-        if !gitignore::is_supported_extension(path) {
+        if !gitignore::should_index_path(path, extra_extensions) {
             continue;
         }
         let meta = match std::fs::metadata(path) {
