@@ -34,6 +34,7 @@ impl ChunkStore {
             std::fs::create_dir_all(dir).map_err(CgError::Io)?;
         }
         let conn = Connection::open(path).map_err(CgError::Database)?;
+        apply_pragmas(&conn)?;
         let s = Self { conn };
         s.init_schema()?;
         Ok(s)
@@ -302,6 +303,18 @@ impl ChunkStore {
     }
 }
 
+fn apply_pragmas(conn: &Connection) -> Result<(), CgError> {
+    conn.execute_batch(
+        "PRAGMA journal_mode = WAL;
+         PRAGMA synchronous = NORMAL;
+         PRAGMA busy_timeout = 5000;
+         PRAGMA cache_size = -65536;
+         PRAGMA temp_store = MEMORY;
+         PRAGMA mmap_size = 268435456;",
+    )
+    .map_err(CgError::Database)
+}
+
 fn fts_query_pattern(q: &str) -> Option<String> {
     let parts: Vec<String> = q
         .split_whitespace()
@@ -316,5 +329,26 @@ fn fts_query_pattern(q: &str) -> Option<String> {
         None
     } else {
         Some(parts.join(" OR "))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pragmas_are_applied_on_open() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("store.db");
+        let _store = ChunkStore::open(&db_path).expect("open store");
+        let conn = Connection::open(&db_path).expect("raw open");
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode", [], |row| row.get::<_, String>(0))
+            .expect("pragma journal_mode");
+        assert_eq!(mode.to_lowercase(), "wal");
+        let busy_ms: i64 = conn
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .expect("pragma busy_timeout");
+        assert_eq!(busy_ms, 5000);
     }
 }

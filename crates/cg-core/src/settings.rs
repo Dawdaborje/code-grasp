@@ -206,7 +206,9 @@ impl Settings {
             self.indexing.default_limit = o.indexing.default_limit;
         }
         if !o.indexing.extra_extensions.is_empty() {
-            self.indexing.extra_extensions.clone_from(&o.indexing.extra_extensions);
+            self.indexing
+                .extra_extensions
+                .clone_from(&o.indexing.extra_extensions);
         }
         self.lsp
             .rust_analyzer_path

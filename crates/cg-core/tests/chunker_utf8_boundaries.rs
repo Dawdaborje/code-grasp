@@ -37,9 +37,7 @@ fn python_oversized_split_does_not_panic_on_utf8() {
     inner.push_str(&"a".repeat(1799));
     inner.push('ó');
     inner.push_str(&"b".repeat(200));
-    let body = format!(
-        "def big():\n    x = '''\n{inner}\n'''\n    return x\n"
-    );
+    let body = format!("def big():\n    x = '''\n{inner}\n'''\n    return x\n");
     let chunker = AstChunker::new(2, 20);
     let file = SourceFile {
         path: PathBuf::from("big_string.py"),

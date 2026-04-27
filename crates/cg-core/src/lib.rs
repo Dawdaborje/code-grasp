@@ -37,7 +37,10 @@
 //!     let cg = CodeGrasp::new(project.to_path_buf(), settings);
 //!
 //!     let stats = cg.index(false).await?;
-//!     println!("indexed {} files, {} chunks", stats.files_indexed, stats.chunks_written);
+//!     println!(
+//!         "indexed {} files ({} skipped), {} chunks in {} ms",
+//!         stats.files_indexed, stats.files_skipped, stats.chunks_written, stats.elapsed_ms
+//!     );
 //!
 //!     let hits = cg.search("authentication", 10).await?;
 //!     for h in &hits {

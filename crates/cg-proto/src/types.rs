@@ -20,6 +20,9 @@ pub struct IndexCodebaseOutput {
     pub message: String,
     /// Count of source files processed in the indexing pass.
     pub files_indexed: u64,
+    /// Walked files that were unchanged since the last index and not re-processed.
+    #[serde(default)]
+    pub files_skipped: u64,
     /// Chunk rows written in the indexing pass.
     pub chunks_written: u64,
 }

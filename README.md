@@ -7,6 +7,13 @@ CodeGrasp indexes a local codebase into **SQLite (FTS5)** plus a **usearch** vec
 - Rust toolchain (2024 edition) as pinned by the repo
 - For default embeddings: disk space for the fastembed model cache (first run may download)
 
+## Platforms (cross-platform)
+
+The **Rust workspace** is intended to build and run on **Linux, macOS, and Windows** (paths use `std::path`; SQLite is bundled via `rusqlite`; ONNX Runtime comes in via `ort` / fastembed defaults). CI or per-OS quirks can still appear around native stacks (OpenSSL/TLS, ORT binaries, AV scanners on Windows).
+
+- **Default embeddings:** CPU ONNX (`ort-bundled`). Optional **`ort-cuda`** is **NVIDIA-only** (not available on Apple Silicon or typical AMD iGPU).
+- **GPU elsewhere:** not wired yet; see future work for DirectML / ROCm / CoreML.
+
 ## Install (from source)
 
 ```bash
@@ -16,7 +23,19 @@ cargo install --path cg_mcp
 
 Binaries: **`cg`** (package `code-grasp`) and **`code-grasp-mcp`**.
 
-On Linux you can instead run **`./scripts/install_linux.sh`** from a clone: it builds release binaries and copies **`cg`** and **`code-grasp-mcp`** into **`~/.local/bin`** (or **`BIN_DIR`**). MCP is **stdio** — your editor spawns that binary; **do not** run it as a systemd service for normal MCP.
+### Install scripts (from a clone)
+
+Each script builds **release** binaries and copies them into **`BIN_DIR`** if set, otherwise **`~/.local/bin`** (macOS/Linux) or **`%USERPROFILE%\.local\bin`** (Windows). Override with `BIN_DIR` / `$env:BIN_DIR`.
+
+| OS | Command |
+|----|---------|
+| **Linux** | `bash scripts/install_linux.sh` |
+| **macOS** | `bash scripts/install_mac.sh` |
+| **Windows** | `pwsh -ExecutionPolicy Bypass -File .\scripts\install_windows.ps1` |
+
+MCP is **stdio** — your editor spawns **`code-grasp-mcp`**; **do not** run it as a systemd service on Linux for normal MCP.
+
+**System ONNX (optional):** set **`CODEGRASP_ORT_DYNAMIC=1`** when running the install script, then point **`ORT_DYLIB_PATH`** at a compatible `libonnxruntime.so` / `libonnxruntime.dylib` / `onnxruntime.dll` (see script comments and `cg_core` features).
 
 ### Feature flags (build time)
 

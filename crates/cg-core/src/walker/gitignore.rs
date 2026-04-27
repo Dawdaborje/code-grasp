@@ -150,9 +150,7 @@ pub fn is_well_known_text_basename(path: &Path) -> bool {
         return false;
     };
     let lower = name.to_ascii_lowercase();
-    WELL_KNOWN_TEXT_NAMES
-        .iter()
-        .any(|&known| known == lower.as_str())
+    WELL_KNOWN_TEXT_NAMES.contains(&lower.as_str())
 }
 
 /// Whether `path` should be walked for indexing: built-in extension, `extra_extensions`, or well-known basename.
@@ -167,7 +165,7 @@ pub fn should_index_path(path: &Path, extra_extensions: &[String]) -> bool {
     else {
         return false;
     };
-    if BUILTIN_INDEX_EXTENSIONS.iter().any(|&b| b == ext.as_str()) {
+    if BUILTIN_INDEX_EXTENSIONS.contains(&ext.as_str()) {
         return true;
     }
     extra_extensions

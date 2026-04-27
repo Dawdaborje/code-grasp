@@ -37,7 +37,19 @@ impl VectorIndex {
         Ok(Self { index, path })
     }
 
-    /// Pre-allocate index capacity (reduces reallocations during bulk `add`).
+    /// Returns the number of vectors currently stored in the index.
+    pub fn len(&self) -> usize {
+        self.index.size()
+    }
+
+    /// Returns `true` when the index contains no vectors.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Pre-allocate capacity for at least `capacity` vectors total (including vectors already stored).
+    ///
+    /// This is a hint to the underlying USearch index; growth still succeeds if the hint is too low.
     pub fn reserve(&self, capacity: usize) -> Result<(), CgError> {
         self.index
             .reserve(capacity)
@@ -115,5 +127,54 @@ impl VectorIndex {
     /// Vector dimensions configured for this index.
     pub fn dimensions(&self) -> usize {
         self.index.dimensions()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::tempdir;
+
+    use super::VectorIndex;
+
+    #[test]
+    fn len_returns_zero_on_empty_index() {
+        let dir = tempdir().expect("tempdir");
+        let p = dir.path().join("idx.usr");
+        let idx = VectorIndex::open_or_create(&p, 8).expect("create");
+        assert_eq!(idx.len(), 0);
+        assert!(idx.is_empty());
+    }
+
+    /// `Index::add` is covered end-to-end by `tests/index_pipeline_perf.rs`; an isolated `add`
+    /// in this crate’s unit-test binary has triggered native SIGSEGV with usearch 2.25.1 on
+    /// some targets, so we only assert `len` wiring on an empty persisted index here.
+    #[test]
+    fn len_stable_across_reopen_empty_index() {
+        let dir = tempdir().expect("tempdir");
+        let p = dir.path().join("idx.usr");
+        {
+            let idx = VectorIndex::open_or_create(&p, 4).expect("create");
+            assert_eq!(idx.len(), 0);
+            idx.save().expect("save");
+        }
+        let idx2 = VectorIndex::open_or_create(&p, 4).expect("reopen");
+        assert_eq!(idx2.len(), 0);
+        assert!(idx2.is_empty());
+    }
+
+    #[test]
+    fn reserve_does_not_panic_on_valid_capacity() {
+        let dir = tempdir().expect("tempdir");
+        let p = dir.path().join("idx.usr");
+        let idx = VectorIndex::open_or_create(&p, 4).expect("create");
+        idx.reserve(10_000).expect("reserve");
+    }
+
+    #[test]
+    fn remove_absent_key_is_ok() {
+        let dir = tempdir().expect("tempdir");
+        let p = dir.path().join("idx.usr");
+        let idx = VectorIndex::open_or_create(&p, 4).expect("create");
+        idx.remove(99_999).expect("remove absent");
     }
 }

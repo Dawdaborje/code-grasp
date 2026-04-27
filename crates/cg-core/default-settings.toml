@@ -1,6 +1,8 @@
 [embedding]
 provider = "fastembed"
 model = "BAAI/bge-small-en-v1.5"
+# How many chunk texts are passed to the ONNX model per inference call (default 64).
+# Tune for RAM and throughput: try 32 on <8GB RAM, 128 on >16GB RAM or with GPU EP; benchmark with `cg index --force`.
 batch_size = 64
 
 [indexing]

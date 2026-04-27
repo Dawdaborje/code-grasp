@@ -51,10 +51,11 @@ impl CodeGraspMcp {
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
         let out = IndexCodebaseOutput {
             message: format!(
-                "Indexed {} files, wrote {} chunks.",
-                stats.files_indexed, stats.chunks_written
+                "Indexed {} files ({} unchanged skipped), wrote {} chunks.",
+                stats.files_indexed, stats.files_skipped, stats.chunks_written
             ),
             files_indexed: stats.files_indexed,
+            files_skipped: stats.files_skipped,
             chunks_written: stats.chunks_written,
         };
         Ok(CallToolResult::success(vec![Content::json(out)?]))
@@ -200,7 +201,9 @@ fn init_mcp_logging() {
         .with_target(true)
         .try_init();
     if let Err(e) = res {
-        let msg = format!("[code-grasp-mcp] tracing subscriber not installed (already initialized?): {e}");
+        let msg = format!(
+            "[code-grasp-mcp] tracing subscriber not installed (already initialized?): {e}"
+        );
         let _ = writeln!(std::io::stderr(), "{msg}");
         append_diag_file(&msg);
     }
@@ -244,27 +247,22 @@ async fn async_main() -> anyhow::Result<()> {
 
     let service = CodeGraspMcp::new();
     let transport = rmcp::transport::stdio();
-    let running = serve_server(service, transport)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "MCP handshake failed (initialize / transport)");
-            let msg = format!("[code-grasp-mcp] MCP handshake failed: {e}");
-            let _ = writeln!(std::io::stderr(), "{msg}");
-            append_diag_file(&msg);
-            anyhow::anyhow!("{e}")
-        })?;
+    let running = serve_server(service, transport).await.map_err(|e| {
+        tracing::error!(error = %e, "MCP handshake failed (initialize / transport)");
+        let msg = format!("[code-grasp-mcp] MCP handshake failed: {e}");
+        let _ = writeln!(std::io::stderr(), "{msg}");
+        append_diag_file(&msg);
+        anyhow::anyhow!("{e}")
+    })?;
 
     tracing::info!("MCP session ready (initialize completed)");
-    running
-        .waiting()
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "MCP session ended with error");
-            let msg = format!("[code-grasp-mcp] MCP session error: {e}");
-            let _ = writeln!(std::io::stderr(), "{msg}");
-            append_diag_file(&msg);
-            anyhow::anyhow!("{e}")
-        })?;
+    running.waiting().await.map_err(|e| {
+        tracing::error!(error = %e, "MCP session ended with error");
+        let msg = format!("[code-grasp-mcp] MCP session error: {e}");
+        let _ = writeln!(std::io::stderr(), "{msg}");
+        append_diag_file(&msg);
+        anyhow::anyhow!("{e}")
+    })?;
     tracing::info!("MCP session shut down normally");
     Ok(())
 }

@@ -110,11 +110,7 @@ impl AstChunker {
 
     fn line_for_byte(source: &str, byte: usize) -> u32 {
         let byte = source.floor_char_boundary(byte.min(source.len()));
-        source[..byte]
-            .bytes()
-            .filter(|&b| b == b'\n')
-            .count() as u32
-            + 1
+        source[..byte].bytes().filter(|&b| b == b'\n').count() as u32 + 1
     }
 
     fn word_count(s: &str) -> u32 {
@@ -131,9 +127,7 @@ impl AstChunker {
         let (start, end) = utf8_clamp_range(source, start, end);
         let content = source[start..end].to_string();
         let start_line = Self::line_for_byte(source, start);
-        let end_byte = end
-            .saturating_sub(1)
-            .min(source.len().saturating_sub(1));
+        let end_byte = end.saturating_sub(1).min(source.len().saturating_sub(1));
         let end_line = Self::line_for_byte(source, end_byte);
         let content_hash = hash_bytes(content.as_bytes());
         Chunk {

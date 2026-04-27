@@ -237,9 +237,10 @@ async fn run(cli: &Cli) -> Result<(), CgError> {
             let res = cg.index(*force).await;
             pb.finish_and_clear();
             let stats = res?;
+            let secs = stats.elapsed_ms as f64 / 1000.0;
             println!(
-                "Done. Files (re)indexed: {}, chunks written: {}.",
-                stats.files_indexed, stats.chunks_written
+                "Done. Indexed {} file(s) ({} unchanged skipped), {} chunk(s) in {:.1}s.",
+                stats.files_indexed, stats.files_skipped, stats.chunks_written, secs
             );
         }
         Commands::Search { path, query, limit } => {

@@ -93,11 +93,7 @@ fn write_pretty_json(path: &Path, value: &Value) -> Result<(), CgError> {
 }
 
 /// Cursor: top-level `mcpServers`.
-fn merge_cursor_mcp(
-    path: &Path,
-    command: &str,
-    force: bool,
-) -> Result<MergeOutcome, CgError> {
+fn merge_cursor_mcp(path: &Path, command: &str, force: bool) -> Result<MergeOutcome, CgError> {
     let mut doc = if path.is_file() {
         let raw = std::fs::read_to_string(path).map_err(CgError::Io)?;
         serde_json::from_str::<Value>(&raw)
@@ -137,11 +133,7 @@ fn merge_cursor_mcp(
 }
 
 /// VS Code: top-level `servers` in `.vscode/mcp.json`.
-fn merge_vscode_mcp(
-    path: &Path,
-    command: &str,
-    force: bool,
-) -> Result<MergeOutcome, CgError> {
+fn merge_vscode_mcp(path: &Path, command: &str, force: bool) -> Result<MergeOutcome, CgError> {
     let mut doc = if path.is_file() {
         let raw = std::fs::read_to_string(path).map_err(CgError::Io)?;
         serde_json::from_str::<Value>(&raw)
@@ -165,10 +157,7 @@ fn merge_vscode_mcp(
         .get_mut("servers")
         .and_then(Value::as_object_mut)
         .ok_or_else(|| {
-            CgError::Config(format!(
-                "{}: servers must be a JSON object",
-                path.display()
-            ))
+            CgError::Config(format!("{}: servers must be a JSON object", path.display()))
         })?;
 
     if servers.contains_key(SERVER_KEY) && !force {
@@ -202,10 +191,7 @@ fn merge_zed_context_server(
     })?;
 
     if !root.contains_key("context_servers") {
-        root.insert(
-            "context_servers".to_string(),
-            Value::Object(Map::new()),
-        );
+        root.insert("context_servers".to_string(), Value::Object(Map::new()));
     }
 
     let ctx = root
