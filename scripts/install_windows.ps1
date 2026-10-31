@@ -57,8 +57,8 @@ Write-Host ''
 Write-Host 'Add to PATH if needed (User environment variables), e.g.:'
 Write-Host "  $BinDir"
 Write-Host ''
-Write-Host 'MCP: configure your client to run:'
-Write-Host "  $(Join-Path $BinDir 'code-grasp-mcp.exe')"
+Write-Host 'MCP: `cg init` writes editor configs that run `code-grasp-mcp` by name (no user-specific path),'
+Write-Host "  so $BinDir must be on the PATH your editor sees (stdio)."
 Write-Host ''
 Write-Host 'Tip: after git pull, run this script again so PATH binaries match the tree.'
 Write-Host 'Optional NVIDIA GPU on Windows: build with --features ort-cuda (see README).'

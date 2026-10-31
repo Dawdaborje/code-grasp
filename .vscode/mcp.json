@@ -2,7 +2,7 @@
   "servers": {
     "code-grasp": {
       "args": [],
-      "command": "/home/borje/.local/bin/code-grasp-mcp",
+      "command": "code-grasp-mcp",
       "env": {
         "RUST_LOG": "info"
       },

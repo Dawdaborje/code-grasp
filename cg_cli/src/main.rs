@@ -60,8 +60,9 @@ enum Commands {
     Search {
         path: PathBuf,
         query: String,
-        #[arg(long, default_value_t = 10)]
-        limit: usize,
+        /// Maximum hits to return (default: `[indexing] default_limit`, normally 10)
+        #[arg(long)]
+        limit: Option<usize>,
     },
     /// Show indexing status
     Status { path: PathBuf },
@@ -246,8 +247,9 @@ async fn run(cli: &Cli) -> Result<(), CgError> {
         Commands::Search { path, query, limit } => {
             let root = path.canonicalize().map_err(CgError::Io)?;
             let settings = Settings::load(&root, None)?;
+            let limit = limit.unwrap_or(settings.indexing.default_limit);
             let cg = CodeGrasp::new(root, settings);
-            let hits = cg.search(query, *limit).await?;
+            let hits = cg.search(query, limit).await?;
             for h in hits {
                 println!(
                     "[{:.2}] {}:{}-{}",

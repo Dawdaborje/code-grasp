@@ -1,20 +1,16 @@
 use std::fs;
-use std::path::Path;
 
 use assert_cmd::Command;
 use serde_json::Value;
 
-fn mcp_command_basename(v: &Value, path: &[&str]) -> String {
+/// The command written by `cg init`. It must be the bare name (resolved via `PATH`), never a
+/// user-specific absolute path, so committed editor configs work for everyone who clones the repo.
+fn mcp_command(v: &Value, path: &[&str]) -> String {
     let mut cur: &Value = v;
     for p in path {
         cur = &cur[*p];
     }
-    let s = cur.as_str().expect("command string");
-    Path::new(s)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(s)
-        .to_string()
+    cur.as_str().expect("command string").to_string()
 }
 
 fn cg() -> Command {
@@ -35,7 +31,7 @@ fn init_creates_code_grasp_and_all_editor_mcp_configs() {
     let raw = fs::read_to_string(&cursor_path).unwrap();
     let v: Value = serde_json::from_str(&raw).unwrap();
     assert_eq!(
-        mcp_command_basename(&v, &["mcpServers", "code-grasp", "command"]),
+        mcp_command(&v, &["mcpServers", "code-grasp", "command"]),
         "code-grasp-mcp"
     );
     assert_eq!(v["mcpServers"]["code-grasp"]["args"], Value::Array(vec![]));
@@ -47,7 +43,7 @@ fn init_creates_code_grasp_and_all_editor_mcp_configs() {
     let vvs: Value = serde_json::from_str(&vs).unwrap();
     assert_eq!(vvs["servers"]["code-grasp"]["type"], "stdio");
     assert_eq!(
-        mcp_command_basename(&vvs, &["servers", "code-grasp", "command"]),
+        mcp_command(&vvs, &["servers", "code-grasp", "command"]),
         "code-grasp-mcp"
     );
     assert_eq!(vvs["servers"]["code-grasp"]["env"]["RUST_LOG"], "info");
@@ -58,7 +54,7 @@ fn init_creates_code_grasp_and_all_editor_mcp_configs() {
     let vz: Value = serde_json::from_str(&zs).unwrap();
     assert_eq!(vz["context_servers"]["code-grasp"]["source"], "custom");
     assert_eq!(
-        mcp_command_basename(&vz, &["context_servers", "code-grasp", "command"]),
+        mcp_command(&vz, &["context_servers", "code-grasp", "command"]),
         "code-grasp-mcp"
     );
     assert_eq!(
@@ -107,7 +103,7 @@ fn init_merges_preserving_other_entries() {
     let v: Value = serde_json::from_str(&raw).unwrap();
     assert_eq!(v["mcpServers"]["other"]["command"], "other-mcp");
     assert_eq!(
-        mcp_command_basename(&v, &["mcpServers", "code-grasp", "command"]),
+        mcp_command(&v, &["mcpServers", "code-grasp", "command"]),
         "code-grasp-mcp"
     );
 
@@ -115,7 +111,7 @@ fn init_merges_preserving_other_entries() {
     let vvs: Value = serde_json::from_str(&vs).unwrap();
     assert_eq!(vvs["servers"]["other-vs"]["command"], "other");
     assert_eq!(
-        mcp_command_basename(&vvs, &["servers", "code-grasp", "command"]),
+        mcp_command(&vvs, &["servers", "code-grasp", "command"]),
         "code-grasp-mcp"
     );
 }
@@ -220,20 +216,20 @@ fn init_force_rewrites_all_editor_entries() {
 
     let v: Value = serde_json::from_str(&fs::read_to_string(&cursor_path).unwrap()).unwrap();
     assert_eq!(
-        mcp_command_basename(&v, &["mcpServers", "code-grasp", "command"]),
+        mcp_command(&v, &["mcpServers", "code-grasp", "command"]),
         "code-grasp-mcp"
     );
 
     let vvs: Value = serde_json::from_str(&fs::read_to_string(&vscode_path).unwrap()).unwrap();
     assert_eq!(
-        mcp_command_basename(&vvs, &["servers", "code-grasp", "command"]),
+        mcp_command(&vvs, &["servers", "code-grasp", "command"]),
         "code-grasp-mcp"
     );
     assert_eq!(vvs["servers"]["code-grasp"]["type"], "stdio");
 
     let vz: Value = serde_json::from_str(&fs::read_to_string(&zed_path).unwrap()).unwrap();
     assert_eq!(
-        mcp_command_basename(&vz, &["context_servers", "code-grasp", "command"]),
+        mcp_command(&vz, &["context_servers", "code-grasp", "command"]),
         "code-grasp-mcp"
     );
 }

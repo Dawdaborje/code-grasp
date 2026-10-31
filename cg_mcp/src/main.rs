@@ -72,9 +72,10 @@ impl CodeGraspMcp {
         let root = PathBuf::from(input.path.trim());
         let settings = Settings::load(&root, None)
             .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?;
+        let limit = input.limit.unwrap_or(settings.indexing.default_limit);
         let cg = CodeGrasp::new(root, settings);
         let hits = cg
-            .search(&input.query, input.limit)
+            .search(&input.query, limit)
             .await
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
         let hits: Vec<SearchHit> = hits

@@ -23,8 +23,6 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-DEFAULT_BENCH_ROOT = "/home/borje/Documents/Personal/personal/arvora/arvora-os.git/os-distro"
-
 QUERIES = [
     "pacman",
     "mkinitcpio",
@@ -90,7 +88,10 @@ def run_timed(cmd: list[str], cwd: Path | None, env: dict[str, str]) -> float:
 
 def main() -> int:
     root = repo_root()
-    bench_root = Path(os.environ.get("BENCH_ROOT", DEFAULT_BENCH_ROOT)).resolve()
+    bench_root_env = os.environ.get("BENCH_ROOT", "").strip()
+    if not bench_root_env:
+        sys.exit("BENCH_ROOT is required: set it to the repository to benchmark (see bench/README.md).")
+    bench_root = Path(bench_root_env).resolve()
     n_iter = int(os.environ.get("BENCH_ITER", "30"))
     cargo_release = os.environ.get("BENCH_RELEASE", "1") not in ("0", "false", "no")
 

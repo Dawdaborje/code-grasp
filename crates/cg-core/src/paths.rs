@@ -18,6 +18,9 @@ pub const STORE_DB: &str = "store.db";
 /// Relative path to the incremental manifest.
 pub const MANIFEST_FILE: &str = "manifest.json";
 
+/// Relative path to the lock file guarding concurrent index writers.
+pub const LOCK_FILE: &str = "index.lock";
+
 /// Relative path to per-project configuration overrides.
 pub const PROJECT_CONFIG: &str = "config.toml";
 
@@ -54,4 +57,9 @@ pub fn global_config_path() -> Option<PathBuf> {
 /// Returns `~/.cache/code-grasp/models` when available.
 pub fn models_cache_dir() -> Option<PathBuf> {
     dirs::cache_dir().map(|p| p.join("code-grasp").join("models"))
+}
+
+/// Returns `<project_root>/.code-grasp/index.lock`.
+pub fn lock_path(project_root: &Path) -> PathBuf {
+    project_data_dir(project_root).join(LOCK_FILE)
 }

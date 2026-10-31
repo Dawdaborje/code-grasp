@@ -7,7 +7,7 @@ Compares **`cg search`** (full subprocess: settings load, query embedding, hybri
 From the **code-grasp** repository root:
 
 ```bash
-export BENCH_ROOT=/path/to/your/repo   # optional; default is arvora os-distro path in script
+export BENCH_ROOT=/path/to/your/repo   # required: repository to index and query
 export BENCH_ITER=30                   # optional; default 30
 export BENCH_RELEASE=1                 # optional; 0 = debug build for `cg`
 

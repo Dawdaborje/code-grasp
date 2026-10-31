@@ -5,7 +5,7 @@ use std::sync::{Mutex, OnceLock};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use ort::execution_providers::CPUExecutionProvider;
 
-use crate::embedder::Embedder;
+use crate::embedder::{Embedder, prefetch_fastembed_model_weights};
 use crate::error::CgError;
 use crate::paths;
 
@@ -60,6 +60,10 @@ impl FastEmbedder {
         let info = TextEmbedding::get_model_info(&embedding_model)
             .map_err(|e| CgError::Embedding(e.to_string()))?;
         let dimension = info.dim;
+
+        // Populate the HF cache ourselves (with a token-less retry) so fastembed's own fetch,
+        // which always sends the saved Hugging Face token, only ever hits the local cache.
+        prefetch_fastembed_model_weights(model_name, true)?;
 
         ensure_ort_environment()?;
 

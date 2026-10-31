@@ -11,7 +11,7 @@ project root
 walk_sources (ignore crate: .gitignore, .cgignore, hidden dirs, size, binary sniff, extensions)
     │
     ▼
-AstChunker (tree-sitter per language, sliding-window fallback)
+AstChunker (tree-sitter per language, line-aligned window fallback)
     │
     ▼
 FastEmbedder (default) or OpenAIEmbedder (feature `openai`, env API key)
@@ -31,7 +31,11 @@ Query text is embedded once. **Vector** search returns nearest neighbors by dist
 
 ## Incremental indexing
 
-A **manifest** (JSON with per-file content hashes under `.code-grasp/`) drives updates: changed paths are re-chunked and re-embedded; removed paths drop rows and vector keys. If embedding **dimension** or provider metadata disagrees with the store, the index is cleared and rebuilt.
+A **manifest** (JSON with per-file content hashes under `.code-grasp/`) drives updates: changed paths are re-chunked and re-embedded; removed paths drop rows and vector keys. If the embedding **provider**, **model**, or **dimension** recorded in the store differs from the configuration, the index is cleared and rebuilt (search refuses to run against an index built with a different model). Writers (`index`, `clear`) hold an exclusive OS lock on `.code-grasp/index.lock`, so concurrent CLI/MCP runs fail fast instead of corrupting the index.
+
+## Chunking
+
+Tree-sitter queries capture declarations (functions, classes, impls, ...). A declaration that fits `max_chunk_tokens` (whitespace word count, plus a byte cap for minified text) is one chunk; a larger one is broken into its nested declarations, with its header/footer and other uncaptured code as separate chunks, so every non-blank byte is covered exactly once. Code between declarations (imports, constants, top-level statements) forms its own chunks. Chunks under `min_chunk_tokens` merge into a neighbour when the result still fits. Unsupported languages use line-aligned windows with a small overlap.
 
 ## Configuration
 

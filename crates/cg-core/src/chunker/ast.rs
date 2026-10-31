@@ -1,9 +1,9 @@
-//! AST-guided chunking via tree-sitter; falls back to sliding windows for unknown languages.
+//! AST-guided chunking via tree-sitter; falls back to line-aligned windows for unknown languages.
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Language as TsLanguage, Parser, Query, QueryCursor};
@@ -22,11 +22,19 @@ fn utf8_clamp_range(source: &str, start: usize, end: usize) -> (usize, usize) {
     (start, end.max(start))
 }
 
+/// Upper bound on chunk bytes per configured token (see [`AstChunker::max_bytes`]).
+const BYTES_PER_TOKEN_CAP: usize = 8;
+
 /// Token counts are approximated as **whitespace-delimited word counts** (no external tokenizer).
+///
+/// Chunks cover the whole file: matched declarations (functions, classes, impls, ...) become
+/// chunks when they fit `max_tokens`; larger ones are broken down into their nested declarations,
+/// and code between declarations (imports, constants, top-level statements) forms its own chunks.
 pub struct AstChunker {
     pub min_tokens: u32,
     pub max_tokens: u32,
     parsers: Mutex<HashMap<Language, Parser>>,
+    queries: Mutex<HashMap<Language, Arc<Query>>>,
 }
 
 impl Default for AstChunker {
@@ -35,6 +43,7 @@ impl Default for AstChunker {
             min_tokens: 20,
             max_tokens: 512,
             parsers: Mutex::new(HashMap::new()),
+            queries: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -46,6 +55,7 @@ impl AstChunker {
             min_tokens,
             max_tokens,
             parsers: Mutex::new(HashMap::new()),
+            queries: Mutex::new(HashMap::new()),
         }
     }
 
@@ -142,50 +152,184 @@ impl AstChunker {
         }
     }
 
-    fn split_oversized(
+    /// Byte cap per chunk so whitespace-poor text (minified JS, long literals) cannot produce a
+    /// "small" word count that still overflows the embedding model's context.
+    fn max_bytes(&self) -> usize {
+        (self.max_tokens.max(1) as usize).saturating_mul(BYTES_PER_TOKEN_CAP)
+    }
+
+    /// Narrow `[start, end)` to its first and last non-whitespace bytes.
+    fn trim_range(source: &str, start: usize, end: usize) -> (usize, usize) {
+        let (start, end) = utf8_clamp_range(source, start, end);
+        let text = &source[start..end];
+        let lead = text.len() - text.trim_start().len();
+        let trail = text.len() - text.trim_end().len();
+        let s = start + lead;
+        (s, end.saturating_sub(trail).max(s))
+    }
+
+    /// Line-aligned pieces of `[start, end)`; lines longer than the byte cap are cut on char boundaries.
+    fn line_pieces(&self, source: &str, start: usize, end: usize) -> Vec<(usize, usize)> {
+        let cap = self.max_bytes();
+        let mut pieces = Vec::new();
+        let mut line_start = start;
+        while line_start < end {
+            let line_end = source[line_start..end]
+                .find('\n')
+                .map_or(end, |i| line_start + i + 1);
+            let mut s = line_start;
+            while line_end - s > cap {
+                let mut e = source.floor_char_boundary(s + cap);
+                if e <= s {
+                    e = source.ceil_char_boundary(s + 1);
+                }
+                pieces.push((s, e));
+                s = e;
+            }
+            if s < line_end {
+                pieces.push((s, line_end));
+            }
+            line_start = line_end;
+        }
+        pieces
+    }
+
+    /// Split `[start, end)` into line-aligned windows bounded by `max_tokens` words and the byte cap,
+    /// overlapping by roughly an eighth of a window. Whitespace-only ranges yield nothing.
+    fn split_windows(
         &self,
-        file_path: &Path,
+        path: &Path,
         lang: Language,
         source: &str,
         start: usize,
         end: usize,
     ) -> Vec<Chunk> {
-        let (s, e) = utf8_clamp_range(source, start, end);
-        let text = &source[s..e];
-        if Self::word_count(text) <= self.max_tokens {
-            return vec![Self::make_chunk(file_path, lang, source, s, e)];
+        let (start, end) = Self::trim_range(source, start, end);
+        if start >= end {
+            return Vec::new();
         }
-        const WIN: usize = 400;
-        const OVERLAP: usize = 50;
+        let max_words = self.max_tokens.max(1);
+        let max_bytes = self.max_bytes();
+        if Self::word_count(&source[start..end]) <= max_words && end - start <= max_bytes {
+            return vec![Self::make_chunk(path, lang, source, start, end)];
+        }
+
+        let pieces = self.line_pieces(source, start, end);
+        let words: Vec<u32> = pieces
+            .iter()
+            .map(|&(s, e)| Self::word_count(&source[s..e]))
+            .collect();
         let mut out = Vec::new();
-        let b = text.as_bytes();
         let mut i = 0;
-        while i < b.len() {
-            let end_i = (i + WIN).min(b.len());
-            let abs_s = s + i;
-            let abs_e = s + end_i;
-            out.push(Self::make_chunk(file_path, lang, source, abs_s, abs_e));
-            if end_i >= b.len() {
+        while i < pieces.len() {
+            // Grow the window; always take at least one piece.
+            let mut j = i;
+            let mut w = 0u32;
+            while j < pieces.len() {
+                let next_w = w + words[j];
+                let next_b = pieces[j].1 - pieces[i].0;
+                if j > i && (next_w > max_words || next_b > max_bytes) {
+                    break;
+                }
+                w = next_w;
+                j += 1;
+            }
+            let (s, e) = Self::trim_range(source, pieces[i].0, pieces[j - 1].1);
+            if s < e {
+                out.push(Self::make_chunk(path, lang, source, s, e));
+            }
+            if j >= pieces.len() {
                 break;
             }
-            i = (end_i.saturating_sub(OVERLAP)).max(i + 1);
+            // Step back over trailing pieces for overlap, but always advance by at least one.
+            let mut k = j;
+            let mut ow = 0u32;
+            while k - 1 > i
+                && ow + words[k - 1] <= max_words / 8
+                && pieces[j - 1].1 - pieces[k - 1].0 <= max_bytes / 8
+            {
+                ow += words[k - 1];
+                k -= 1;
+            }
+            i = k;
         }
         out
     }
 
-    fn merge_small(chunks: Vec<Chunk>, min_tokens: u32, source: &str) -> Vec<Chunk> {
-        if chunks.is_empty() {
-            return chunks;
+    /// Emit chunks covering `[start, end)` given the query captures inside it (sorted by start
+    /// ascending, end descending). Captures that fit become one chunk; oversized captures recurse
+    /// into their nested captures; uncovered code between captures becomes gap chunks.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_region(
+        &self,
+        path: &Path,
+        lang: Language,
+        source: &str,
+        start: usize,
+        end: usize,
+        caps: &[(usize, usize)],
+        out: &mut Vec<Chunk>,
+    ) {
+        let mut cursor = start;
+        let mut i = 0;
+        while i < caps.len() {
+            let (s, e) = (caps[i].0.max(cursor), caps[i].1.min(end));
+            // Captures starting before `e` are nested inside this one.
+            let mut j = i + 1;
+            while j < caps.len() && caps[j].0 < e {
+                j += 1;
+            }
+            if e <= s {
+                i = j;
+                continue;
+            }
+            out.extend(self.split_windows(path, lang, source, cursor, s));
+            let children = &caps[i + 1..j];
+            let fits =
+                Self::word_count(&source[s..e]) <= self.max_tokens && e - s <= self.max_bytes();
+            if fits || children.is_empty() {
+                out.extend(self.split_windows(path, lang, source, s, e));
+            } else {
+                self.emit_region(path, lang, source, s, e, children, out);
+            }
+            cursor = e;
+            i = j;
         }
+        out.extend(self.split_windows(path, lang, source, cursor, end));
+    }
+
+    /// Extend `into` so it also covers `other` (which follows it), recomputing content and hash.
+    fn absorb(into: &mut Chunk, other: &Chunk, source: &str) {
+        // `max` keeps a chunk from shrinking if `other` ends earlier (e.g. nested ranges).
+        if other.end_byte > into.end_byte {
+            into.end_byte = other.end_byte;
+            into.end_line = other.end_line;
+        }
+        let (s, e) = utf8_clamp_range(source, into.start_byte, into.end_byte);
+        into.content = source[s..e].to_string();
+        into.content_hash = hash_bytes(into.content.as_bytes());
+    }
+
+    /// Merge chunks under `min_tokens` into a neighbour while the result stays within `max_tokens`.
+    fn merge_small(&self, chunks: Vec<Chunk>, source: &str) -> Vec<Chunk> {
+        let min = self.min_tokens;
+        let max = self.max_tokens;
+        let combined_fits = |a: &Chunk, b: &Chunk| {
+            let s = a.start_byte.min(b.start_byte);
+            let e = a.end_byte.max(b.end_byte);
+            let (s, e) = utf8_clamp_range(source, s, e);
+            Self::word_count(&source[s..e]) <= max && e - s <= self.max_bytes()
+        };
+
+        // Forward pass: a small chunk absorbs the one after it.
         let mut out: Vec<Chunk> = Vec::new();
-        let mut cur = chunks[0].clone();
-        for next in chunks.into_iter().skip(1) {
-            if Self::word_count(&cur.content) < min_tokens {
-                cur.end_byte = next.end_byte;
-                cur.end_line = next.end_line;
-                let (s, e) = utf8_clamp_range(source, cur.start_byte, cur.end_byte);
-                cur.content = source[s..e].to_string();
-                cur.content_hash = hash_bytes(cur.content.as_bytes());
+        let mut iter = chunks.into_iter();
+        let Some(mut cur) = iter.next() else {
+            return out;
+        };
+        for next in iter {
+            if Self::word_count(&cur.content) < min && combined_fits(&cur, &next) {
+                Self::absorb(&mut cur, &next, source);
             } else {
                 out.push(cur);
                 cur = next;
@@ -193,21 +337,39 @@ impl AstChunker {
         }
         out.push(cur);
 
+        // Backward pass: a small trailing chunk joins the one before it.
         let mut fixed: Vec<Chunk> = Vec::new();
         for c in out {
             if let Some(prev) = fixed.last_mut()
-                && Self::word_count(&c.content) < min_tokens
+                && Self::word_count(&c.content) < min
+                && combined_fits(prev, &c)
             {
-                prev.end_byte = c.end_byte;
-                prev.end_line = c.end_line;
-                let (s, e) = utf8_clamp_range(source, prev.start_byte, prev.end_byte);
-                prev.content = source[s..e].to_string();
-                prev.content_hash = hash_bytes(prev.content.as_bytes());
+                Self::absorb(prev, &c, source);
                 continue;
             }
             fixed.push(c);
         }
         fixed
+    }
+
+    fn query_for(&self, lang: Language) -> Result<Option<Arc<Query>>, CgError> {
+        let mut guard = self
+            .queries
+            .lock()
+            .map_err(|_| CgError::Chunking("query cache mutex poisoned".to_string()))?;
+        if let Some(q) = guard.get(&lang) {
+            return Ok(Some(Arc::clone(q)));
+        }
+        let (Some(ts_lang), Some(q_src)) = (Self::ts_language(lang), Self::query_source(lang))
+        else {
+            return Ok(None);
+        };
+        let query = Arc::new(
+            Query::new(&ts_lang, q_src)
+                .map_err(|e| CgError::Chunking(format!("query compile: {e}")))?,
+        );
+        guard.insert(lang, Arc::clone(&query));
+        Ok(Some(query))
     }
 
     fn ast_chunks_for_file(
@@ -217,69 +379,32 @@ impl AstChunker {
     ) -> Result<Vec<Chunk>, CgError> {
         let path = &file.path;
         let source = &file.content;
-        let Some(tree) = self.parse(lang, source)? else {
+        let (Some(tree), Some(query)) = (self.parse(lang, source)?, self.query_for(lang)?) else {
             return Ok(self.fallback_windows(path, lang, source));
         };
-        let Some(q_src) = Self::query_source(lang) else {
-            return Ok(self.fallback_windows(path, lang, source));
-        };
-        let ts_lang = Self::ts_language(lang)
-            .ok_or_else(|| CgError::UnsupportedLanguage(format!("{lang:?}")))?;
-        let query = Query::new(&ts_lang, q_src)
-            .map_err(|e| CgError::Chunking(format!("query compile: {e}")))?;
         let mut qc = QueryCursor::new();
         let mut captures: Vec<(usize, usize)> = Vec::new();
-        let root = tree.root_node();
-        let mut matches = qc.matches(&query, root, source.as_bytes());
+        let mut matches = qc.matches(&query, tree.root_node(), source.as_bytes());
         while let Some(m) = matches.next() {
             for cap in m.captures.iter() {
                 let n = cap.node;
-                captures.push((n.start_byte(), n.end_byte()));
+                if n.end_byte() > n.start_byte() {
+                    captures.push((n.start_byte(), n.end_byte()));
+                }
             }
         }
-
-        captures.sort_by_key(|x| x.0);
+        // Outer nodes before the nodes nested inside them.
+        captures.sort_by_key(|&(s, e)| (s, std::cmp::Reverse(e)));
         captures.dedup();
 
-        let mut raw: Vec<Chunk> = Vec::new();
-        for (s, e) in captures {
-            if e <= s {
-                continue;
-            }
-            let parts = self.split_oversized(path, lang, source, s, e);
-            raw.extend(parts);
-        }
-
-        if raw.is_empty() {
-            return Ok(self.fallback_windows(path, lang, source));
-        }
-
-        // Nested/overlapping query captures can yield chunks out of document order; merge
-        // assumes monotonic `start_byte`.
-        raw.sort_by_key(|c| (c.start_byte, c.end_byte));
-
-        let merged = Self::merge_small(raw, self.min_tokens, source);
-        Ok(merged)
+        let mut raw = Vec::new();
+        self.emit_region(path, lang, source, 0, source.len(), &captures, &mut raw);
+        Ok(self.merge_small(raw, source))
     }
 
     fn fallback_windows(&self, path: &Path, lang: Language, source: &str) -> Vec<Chunk> {
-        const WIN: usize = 400;
-        const OVERLAP: usize = 50;
-        let mut out = Vec::new();
-        let b = source.as_bytes();
-        let mut i = 0;
-        while i < b.len() {
-            let end = (i + WIN).min(b.len());
-            out.push(Self::make_chunk(path, lang, source, i, end));
-            if end >= b.len() {
-                break;
-            }
-            i = (end.saturating_sub(OVERLAP)).max(i + 1);
-        }
-        if out.is_empty() && !source.is_empty() {
-            out.push(Self::make_chunk(path, lang, source, 0, source.len()));
-        }
-        out
+        let out = self.split_windows(path, lang, source, 0, source.len());
+        self.merge_small(out, source)
     }
 }
 

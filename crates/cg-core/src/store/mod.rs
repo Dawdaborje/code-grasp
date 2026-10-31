@@ -324,6 +324,9 @@ fn fts_query_pattern(q: &str) -> Option<String> {
                 .collect::<String>()
         })
         .filter(|t| !t.is_empty())
+        // Quote each term so FTS5 keywords (`OR`, `AND`, `NOT`, `NEAR`) in user queries are
+        // matched as words instead of parsed as operators.
+        .map(|t| format!("\"{t}\""))
         .collect();
     if parts.is_empty() {
         None
@@ -352,5 +355,29 @@ mod tests {
             .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
             .expect("pragma busy_timeout");
         assert_eq!(busy_ms, 5000);
+    }
+
+    #[test]
+    fn fts_search_treats_operator_keywords_as_words() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = ChunkStore::open(&dir.path().join("store.db")).expect("open store");
+        let content = "fn read_or_write() { read(); write(); }".to_string();
+        let chunk = Chunk {
+            content_hash: crate::manifest::hash_bytes(content.as_bytes()),
+            content,
+            file_path: "a.rs".into(),
+            start_byte: 0,
+            end_byte: 0,
+            start_line: 1,
+            end_line: 1,
+            language: crate::chunker::Language::Rust,
+        };
+        let ids = store.insert_chunks_bulk(&[chunk]).expect("insert");
+        for q in ["read OR write", "NOT write", "read AND", "NEAR", "\"read\""] {
+            let hits = store.fts_search(q, 10).expect(q);
+            if q != "NEAR" {
+                assert_eq!(hits, ids, "query {q:?}");
+            }
+        }
     }
 }

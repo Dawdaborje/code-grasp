@@ -8,10 +8,8 @@ use serde_json::{Map, Value, json};
 
 const SERVER_KEY: &str = "code-grasp";
 
-/// Path to `code-grasp-mcp` for editor MCP configs.
-///
-/// GUIs often spawn MCP without your shell `PATH`, so `~/.local/bin` may be missing.
-/// Override with `CODEGRASP_MCP_COMMAND` if needed.
+/// Command for editor MCP configs. Keep the default portable across checkouts;
+/// use `CODEGRASP_MCP_COMMAND` when an editor cannot resolve it through `PATH`.
 fn resolve_code_grasp_mcp_command() -> String {
     if let Ok(p) = std::env::var("CODEGRASP_MCP_COMMAND") {
         let p = p.trim();
@@ -19,25 +17,6 @@ fn resolve_code_grasp_mcp_command() -> String {
             return p.to_string();
         }
     }
-    if let Ok(o) = std::process::Command::new("sh")
-        .arg("-c")
-        .arg("command -v code-grasp-mcp 2>/dev/null")
-        .output()
-        && o.status.success()
-    {
-        let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-        if !s.is_empty() {
-            return s;
-        }
-    }
-
-    if let Ok(home) = std::env::var("HOME") {
-        let candidate = Path::new(&home).join(".local/bin/code-grasp-mcp");
-        if candidate.is_file() {
-            return candidate.to_string_lossy().into_owned();
-        }
-    }
-
     "code-grasp-mcp".to_string()
 }
 
@@ -255,8 +234,8 @@ pub fn run(project_root: &Path, no_mcp: bool, force: bool) -> Result<(), CgError
 
     if mcp_command == "code-grasp-mcp" {
         println!(
-            "Note: `code-grasp-mcp` was not resolved to a full path during init; editors may fail to spawn it. \
-             Install to e.g. ~/.local/bin, fix PATH for the GUI, or set CODEGRASP_MCP_COMMAND and run `cg init --force`."
+            "Note: editor processes must be able to resolve `code-grasp-mcp` through PATH. \
+             If not, set CODEGRASP_MCP_COMMAND and run `cg init --force`."
         );
     }
 

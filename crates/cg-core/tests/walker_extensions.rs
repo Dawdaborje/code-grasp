@@ -54,3 +54,19 @@ fn builtin_install_extension_indexed() {
     assert_eq!(files.len(), 1);
     assert_eq!(files[0].path.to_string_lossy(), "50-hooks.install");
 }
+
+#[test]
+fn skips_non_utf8_files_instead_of_failing() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    fs::write(root.join("ok.py"), "x = 1\n").unwrap();
+    // Latin-1 `é` (0xE9) is not valid UTF-8.
+    fs::write(root.join("latin1.py"), b"caf\xe9 = 1\n").unwrap();
+
+    let files = walk_sources(root, 1024 * 1024, &[]).unwrap();
+    let names: Vec<String> = files
+        .iter()
+        .map(|f| f.path.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, vec!["ok.py".to_string()]);
+}

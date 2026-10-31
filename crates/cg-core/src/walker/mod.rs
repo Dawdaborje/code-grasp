@@ -79,7 +79,14 @@ pub fn walk_sources(
         }
 
         let rel = path.strip_prefix(&root).unwrap_or(path);
-        let content = std::fs::read_to_string(path).map_err(CgError::Io)?;
+        // Non-UTF-8 (e.g. Latin-1) or unreadable files are skipped rather than failing the walk.
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::debug!(path = %path.display(), error = %e, "skipping unreadable file");
+                continue;
+            }
+        };
         out.push(SourceFile {
             path: rel.to_path_buf(),
             content,

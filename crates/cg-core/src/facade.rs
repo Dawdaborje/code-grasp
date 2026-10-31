@@ -229,6 +229,34 @@ fn chunk_producer_run(
     Ok(())
 }
 
+/// Metadata keys recorded in `index_meta` describing how the vectors were produced.
+const META_EMBEDDING_DIM: &str = "embedding_dim";
+const META_EMBEDDING_PROVIDER: &str = "embedding_provider";
+const META_EMBEDDING_MODEL: &str = "embedding_model";
+
+/// Minimum candidates pulled from each retrieval channel (dense and FTS) before fusion.
+const SEARCH_MIN_CANDIDATES: usize = 50;
+
+/// Hold an exclusive OS file lock on `.code-grasp/index.lock` so concurrent writers (e.g. the CLI
+/// and the MCP server) cannot interleave updates. The OS releases it if the process dies.
+fn acquire_write_lock(root: &std::path::Path) -> Result<std::fs::File, CgError> {
+    let path = paths::lock_path(root);
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(CgError::Io)?;
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(std::fs::TryLockError::WouldBlock) => Err(CgError::State(format!(
+            "another CodeGrasp process is writing this index (lock held on `{}`); try again when it finishes",
+            path.display()
+        ))),
+        Err(std::fs::TryLockError::Error(e)) => Err(CgError::Io(e)),
+    }
+}
+
 fn blocking_index(root: PathBuf, settings: Settings, force: bool) -> Result<IndexStats, CgError> {
     let start = Instant::now();
     if settings.embedding.provider != "fastembed" {
@@ -238,6 +266,7 @@ fn blocking_index(root: PathBuf, settings: Settings, force: bool) -> Result<Inde
     }
 
     std::fs::create_dir_all(paths::project_data_dir(&root)).map_err(CgError::Io)?;
+    let _lock = acquire_write_lock(&root)?;
 
     let store_path = paths::store_db_path(&root);
     let index_path = paths::index_path(&root);
@@ -262,12 +291,28 @@ fn blocking_index(root: PathBuf, settings: Settings, force: bool) -> Result<Inde
     let embedder = FastEmbedder::new(&settings.embedding.model, settings.embedding.batch_size)?;
     let dim = embedder.dimension();
 
-    let mut full_reindex = force;
-    if let Some(prev) = store.get_meta("embedding_dim")?
-        && prev != dim.to_string()
-    {
-        full_reindex = true;
+    // Vectors from different models live in different spaces even when the dimension matches
+    // (e.g. bge-small and all-MiniLM are both 384-d), so any model/provider change forces a rebuild.
+    // Indexes written before the model was recorded are rebuilt once if they hold any chunks.
+    let model_changed = match store.get_meta(META_EMBEDDING_MODEL)? {
+        Some(prev) => prev != settings.embedding.model,
+        None => store.chunk_count()? > 0,
+    };
+    let provider_changed = store
+        .get_meta(META_EMBEDDING_PROVIDER)?
+        .is_some_and(|prev| prev != settings.embedding.provider);
+    let dim_changed = store
+        .get_meta(META_EMBEDDING_DIM)?
+        .is_some_and(|prev| prev != dim.to_string());
+    if model_changed || provider_changed || dim_changed {
+        tracing::info!(
+            model_changed,
+            provider_changed,
+            dim_changed,
+            "embedding configuration changed; rebuilding index"
+        );
     }
+    let full_reindex = force || model_changed || provider_changed || dim_changed;
 
     if full_reindex {
         store.clear_all()?;
@@ -275,8 +320,9 @@ fn blocking_index(root: PathBuf, settings: Settings, force: bool) -> Result<Inde
         manifest = Manifest::default();
     }
 
-    store.set_meta("embedding_dim", &dim.to_string())?;
-    store.set_meta("embedding_provider", &settings.embedding.provider)?;
+    store.set_meta(META_EMBEDDING_DIM, &dim.to_string())?;
+    store.set_meta(META_EMBEDDING_PROVIDER, &settings.embedding.provider)?;
+    store.set_meta(META_EMBEDDING_MODEL, &settings.embedding.model)?;
 
     let (files_to_process, removed): (Vec<PathBuf>, Vec<String>) = if full_reindex {
         (
@@ -425,8 +471,16 @@ fn blocking_search(
     }
 
     let store = ChunkStore::open(&store_path)?;
+    if let Some(indexed_model) = store.get_meta(META_EMBEDDING_MODEL)?
+        && indexed_model != settings.embedding.model
+    {
+        return Err(CgError::Config(format!(
+            "index was built with embedding model `{indexed_model}` but `{}` is configured; run `cg index` to rebuild",
+            settings.embedding.model
+        )));
+    }
     let dim: usize = store
-        .get_meta("embedding_dim")?
+        .get_meta(META_EMBEDDING_DIM)?
         .ok_or_else(|| CgError::State("missing embedding_dim metadata".into()))?
         .parse()
         .map_err(|_| CgError::State("invalid embedding_dim metadata".into()))?;
@@ -452,23 +506,28 @@ fn blocking_search(
             index_path.display()
         )));
     }
-    let dense = vindex.search(qv, 50)?;
+    let candidates = limit.saturating_mul(2).max(SEARCH_MIN_CANDIDATES);
+    let dense = vindex.search(qv, candidates)?;
     let dense_ids: Vec<i64> = dense.iter().map(|(k, _)| *k as i64).collect();
 
-    let sparse_ids = store.fts_search(query, 50)?;
+    let sparse_ids = store.fts_search(query, candidates)?;
 
-    let top: Vec<(i64, f64)> = reciprocal_rank_fusion(&dense_ids, &sparse_ids)
-        .into_iter()
-        .take(limit)
-        .collect();
-    let ids: Vec<i64> = top.iter().map(|(id, _)| *id).collect();
-    let score_map: HashMap<i64, f64> = top.into_iter().collect();
-
-    let mut hits = store.fetch_chunks(&ids)?;
-    for h in &mut hits {
-        h.score = score_map.get(&h.id).copied().unwrap_or(0.0);
+    // Fused ids can reference vectors whose SQLite row is gone (e.g. after an interrupted run);
+    // keep fetching down the fused ranking so those gaps do not shrink the result below `limit`.
+    let fused = reciprocal_rank_fusion(&dense_ids, &sparse_ids);
+    let mut hits = Vec::with_capacity(limit);
+    for window in fused.chunks(limit) {
+        let ids: Vec<i64> = window.iter().map(|(id, _)| *id).collect();
+        let scores: HashMap<i64, f64> = window.iter().copied().collect();
+        for mut h in store.fetch_chunks(&ids)? {
+            h.score = scores.get(&h.id).copied().unwrap_or(0.0);
+            hits.push(h);
+        }
+        if hits.len() >= limit {
+            break;
+        }
     }
-    hits.sort_by(|a, b| b.score.total_cmp(&a.score));
+    hits.truncate(limit);
 
     Ok(hits
         .into_iter()
@@ -505,6 +564,11 @@ fn blocking_status(root: PathBuf) -> Result<Status, CgError> {
 }
 
 fn blocking_clear(root: PathBuf) -> Result<(), CgError> {
+    let _lock = if paths::project_data_dir(&root).is_dir() {
+        Some(acquire_write_lock(&root)?)
+    } else {
+        None
+    };
     let store_path = paths::store_db_path(&root);
     let index_path = paths::index_path(&root);
     let manifest_path = paths::manifest_path(&root);
@@ -515,4 +579,22 @@ fn blocking_clear(root: PathBuf) -> Result<(), CgError> {
     std::fs::remove_file(&index_path).ok();
     std::fs::remove_file(&manifest_path).ok();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+
+    use super::*;
+
+    #[test]
+    fn write_lock_rejects_second_writer_until_released() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(paths::project_data_dir(dir.path())).expect("data dir");
+        let first = acquire_write_lock(dir.path()).expect("first lock");
+        let err = acquire_write_lock(dir.path()).expect_err("second writer must be rejected");
+        assert!(matches!(err, CgError::State(_)), "{err:?}");
+        drop(first);
+        acquire_write_lock(dir.path()).expect("lock after release");
+    }
 }

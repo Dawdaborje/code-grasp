@@ -34,13 +34,9 @@ pub struct SearchCodeInput {
     pub path: String,
     /// Natural-language or keyword query; embedded for dense search and passed to FTS5.
     pub query: String,
-    /// Maximum number of hits to return (default **10**).
-    #[serde(default = "default_limit")]
-    pub limit: usize,
-}
-
-fn default_limit() -> usize {
-    10
+    /// Maximum number of hits to return (default: the project's `[indexing] default_limit`, normally **10**).
+    #[serde(default)]
+    pub limit: Option<usize>,
 }
 
 /// One ranked hit in a search result list.
